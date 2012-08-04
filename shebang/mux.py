@@ -55,7 +55,7 @@ class Multiplexer(object):
         else:
             view.set_name(task_id.path[:256])
         view.set_scratch(True)
-        view.set_syntax_file("Packages/Shebang/Shebang.tmLanguage")
+        view.set_syntax_file("Packages/Shebang/Output.tmLanguage")
         view.settings().set('word_wrap', False)
         # view.settings().set("result_file_regex", file_regex)
         # view.settings().set("result_line_regex", line_regex)

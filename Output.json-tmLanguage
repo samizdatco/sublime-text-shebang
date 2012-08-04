@@ -1,4 +1,4 @@
-{ "name": "Shebang",
+{ "name": "Command Output",
   "scopeName": "text.shebang",
   "fileTypes": [""],
   "foldingStartMarker":"\u200c",
