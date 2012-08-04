@@ -1,0 +1,83 @@
+{ "name": "Shebang",
+  "scopeName": "text.shebang",
+  "fileTypes": [""],
+  "foldingStartMarker":"\u200c",
+  "foldingStopMarker":"\u200d",
+  "repository": {
+    "pythonTraceback":{
+      "begin":"Traceback \\(most recent call last\\)",
+      "end":"(?=\u200d)",
+      "name":"meta.tag",
+
+      "patterns": [
+        {  
+           "match": "File \"([^\"]+)\", line (\\d+)",
+           "captures": {
+               "1": { "name": "keyword" },
+               "2": { "name": "keyword" }
+           }
+        }
+      ]
+    }
+
+  },
+  "patterns": [
+
+
+    {
+      "match":"^(\\s*\\w+\\:)(.*)$",
+      "captures":{
+        "1":{ "name":"comment.header.shebang"},
+        "2":{ "name":"support.section"}
+      }
+    },
+
+    {
+      "begin":"(?<=\u200c)",
+      "end":"(?=\u200d)",
+      "name":"output.shebang",
+      "patterns":[
+        { "include": "#pythonTraceback" }
+      ],
+      "comment":"script-output body"
+    },
+
+    {
+      "begin":"(?<=\u200b)",
+      "patterns":[
+        {
+          "match":"(?<=\\[)\\d+(?=\\])",
+          "name":"keyword.pid.shebang"
+        }
+      ],
+      "end":"(?=\u200c)",
+      "name":"comment.header.shebang",
+      "comment":"script-started header"
+    },
+
+    {
+      "begin":"(?<=\u200d)",
+      "end":"(\\d+)?(?=\u2060)",
+      "endCaptures":{
+        "1": { "name": "invalid.deprecated.shebang" }
+      },
+      "name":"support.section",
+      "patterns":[
+        {
+          "match":"([\\d\\.]*)(?=[hms\\'\\\"])",
+          "name":"meta.tag"
+        },
+        {
+          "match":"([\\d\\.]*) ((bytes)|(kb)|(mb)|gb)",
+          "name":"meta.tag"
+        }
+      ],
+      "comment":"script-complete footer"
+    }
+
+
+
+
+  ],
+  "uuid": "d763f066-7161-4e49-a979-4f2e70991af3"
+}

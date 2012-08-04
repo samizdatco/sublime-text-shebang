@@ -1,0 +1,18 @@
+[
+  { 
+    "caption": "#!: Run Script", 
+    "command": "execute"
+  },
+  { 
+    "caption": "#!: Restart Script", 
+    "command": "execute", "args":{ "restart":true }
+  },
+  { 
+    "caption": "#!: Run Shell Command…", 
+    "command": "execute", "args":{ "prompt":true }
+  },
+  { 
+    "caption": "#!: Terminate Script…", 
+    "command": "execute", "args":{ "kill":true }
+  }
+]

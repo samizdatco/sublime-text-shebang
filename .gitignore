@@ -1,0 +1,4 @@
+*.hg
+*.pyc
+*.cache
+.DS_Store
