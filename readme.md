@@ -23,7 +23,7 @@ download the current version from the [project page][2] or clone the git reposit
 Usage
 -----
 
-The plugin adds four commands to the command palette:
+The plugin adds four commands to the command palette. They can be run from either a source script or its counterpart output window.
 
  - **Run Script**  
    *run the current file*  
@@ -49,7 +49,7 @@ Configuration
 
 General preferences are stored in a file called `Shebang.sublime-settings`. To make modifications, copy the settings file from the Shebang folder into your `Packages/User` directory.
 
-Within the file you can redefine defaults behaviors:
+Within the file you can redefine default behaviors:
 
  - `confirm_terminate` *true*  
  Whether to pop up a confirmation dialogue before terminating or restarting a running script.
@@ -57,7 +57,7 @@ Within the file you can redefine defaults behaviors:
  - `save_on_run` *true*  
 Whether to save the current script buffer prior to running it.
 
- - `virtualenv` *none*  
+ - `virtualenv` *null*  
 A path (or path fragment) in which a virtualenv python environment can be found. If the value is an absolute or home-relative path, Shebang will simply use the interpreter at that path.  
 ​  
 If the value is an unrooted name, the script’s directory and all parent directories will be traversed and a subdir matching the name will be searched for. Shebang will use the match ‘closest’ in the directory hierarchy to the script (or default to system python if none is found).
@@ -68,7 +68,9 @@ Build System Integration
 
 Shebang can also be used within `.sublime-build` files. It provides a build command called `execute` which is a multi-process version of the `exec` command seen in Sublime’s stock build systems.
 
-To create a custom build system, create a `*.sublime-build` file using the syntax defined in the [documentation][3], but replacing `execute` for `exec` in the `target` field. In addition to the standard fields, Shebang supports some extensions: 
+To create a custom build system, create a `*.sublime-build` file using the syntax defined in the [documentation][3], but replacing `"target":"exec"` with `"target":"execute"`. 
+
+In addition to the standard fields, Shebang supports some extensions: 
 
  - `prompt` controls whether the user can edit the command line before it is executed
  - `virtualenv` if present will override the value in the `.sublime-settings` file
