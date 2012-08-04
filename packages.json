@@ -11,13 +11,13 @@
         "osx": [
           {
             "version": "0.9",
-            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/your_tag_name_here"
+            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/v0.9"
           }
         ],
         "linux":[
           {
             "version": "0.9",
-            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/your_tag_name_here"
+            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/v0.9"
           }
         ]
       }
