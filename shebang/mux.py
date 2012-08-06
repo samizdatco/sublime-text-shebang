@@ -15,7 +15,7 @@ class Multiplexer(object):
     _invs = {}  # cmd invocations
 
     def get_frame(self):
-        if self._frame is None or self._frame not in (w.id() for w in sublime.windows()):
+        if not self._wakeup():
             before = set([w.id() for w in sublime.windows()])
             sublime.run_command("new_window")
             after = set([w.id() for w in sublime.windows()])
@@ -26,12 +26,32 @@ class Multiplexer(object):
             if win.id() == self._frame:
                 return win
 
+    def _wakeup(self):
+        if self._frame is None or self._frame not in (w.id() for w in sublime.windows()):
+            self._frame = None
+            for w in sublime.windows():
+                for v in w.views():
+                    if v.settings().has('shebang.task_id'):
+                        self._frame = w.id()
+                        task_id = json.loads(v.settings().get('shebang.task_id','[]'))
+                        task_inv = json.loads(v.settings().get('shebang.invocation','{}'))
+                        if task_id and task_inv:
+                            task_id = Task(*task_id)
+                            task_inv['task'] = task_id
+                            self._invs[task_id] = task_inv
+                            self._views[task_id] = v.id()
+                            self.formatter.fold_old(v)
+                if self._frame: break
+        return self._frame is not None                
+
     def _cleanup(self, monitor=False):
         if self._frame is None or self._frame not in (w.id() for w in sublime.windows()):
             if self._procs:
                 for info, proc in self._procs.items():
                     print 'Halted %s'%info.path
                     proc.kill()
+                for task_id in self._views.keys():
+                    self.formatter.clear_errors(Task(*task_id))
                 self._procs = {}
                 self._views = {}
                 self._invs = {}
@@ -57,9 +77,6 @@ class Multiplexer(object):
         view.set_scratch(True)
         view.set_syntax_file("Packages/Shebang/Output.tmLanguage")
         view.settings().set('word_wrap', False)
-        # view.settings().set("result_file_regex", file_regex)
-        # view.settings().set("result_line_regex", line_regex)
-        # view.settings().set("result_base_dir", working_dir)
         self._views[task_id] = view.id()
         return view
 
@@ -69,10 +86,10 @@ class Multiplexer(object):
                 return
 
         if invocation:
-            invocation['listener'] = self
             invocation['task'] = task_id
             self._invs[task_id] = invocation
         else:
+            self._wakeup()
             invocation = self._invs.get(task_id)
             if not invocation:
                 print "Trying to rerun script but i don't remember where i came from"
@@ -86,9 +103,10 @@ class Multiplexer(object):
             if invocation['path']:
                 os.environ["PATH"] = os.path.expandvars(invocation["path"]).encode(sys.getfilesystemencoding())                
             os.chdir(invocation['working_dir'])
-            proc = AsyncProcess(**invocation)
+            proc = AsyncProcess(listener=self, **invocation)
             view = self.get_task_view(task_id)
-            view.settings().set("task_id", json.dumps(task_id))
+            view.settings().set("shebang.invocation", json.dumps(invocation))
+            view.settings().set("shebang.task_id", json.dumps(task_id))
             self._procs[task_id] = proc
             self.formatter.begin_run(view, proc.pid, invocation)
             print 'Running %s'%task_id.path
@@ -131,6 +149,7 @@ class Multiplexer(object):
     def view_closed(self, task_id):
         if task_id in self._views: del self._views[task_id]
         if task_id in self._invs: del self._invs[task_id]
+        self.formatter.clear_errors(task_id)
         stale_proc = self._procs.get(task_id)
         if stale_proc:
             print 'Halted %s'%stale_proc.task.path
@@ -140,9 +159,10 @@ class Multiplexer(object):
     def script_complete(self, proc):
         print 'Complete %s'%proc.task.path
         view = self.get_task_view(proc.task)
-        elapsed = time.time() - proc.start_time
-        exit_code = proc.exit_code()
-        self.formatter.completed_run(view, proc.task, exit_code, elapsed, proc.cwd)
+        info = dict(self._invs[proc.task])
+        info.update(dict(exit_code=proc.exit_code(), 
+                         elapsed=time.time() - proc.start_time))
+        self.formatter.completed_run(view, proc.task, info)
         del self._procs[proc.task]
 
     # event handlers for the async proc running behind the scenes

@@ -7,27 +7,26 @@ import shlex
 import sublime, sublime_plugin
 from sublime import Region
 from os.path import dirname, relpath, exists
-# from shebang import Task, AsyncProcess, Formatter, Multiplexer
 
-import shebang.format
-reload(shebang.format); Formatter = shebang.format.Formatter
-import shebang.proc
-reload(shebang.proc); Task = shebang.proc.Task; AsyncProcess = shebang.proc.AsyncProcess
-import shebang.mux
-reload(shebang.mux); Multiplexer = shebang.mux.Multiplexer
-
+from shebang import Task, AsyncProcess, Formatter, Multiplexer
+# import shebang.format
+# reload(shebang.format); Formatter = shebang.format.Formatter
+# import shebang.proc
+# reload(shebang.proc); Task = shebang.proc.Task; AsyncProcess = shebang.proc.AsyncProcess
+# import shebang.mux
+# reload(shebang.mux); Multiplexer = shebang.mux.Multiplexer
 
 pool = Multiplexer()
 class OutputViewWatcher(sublime_plugin.EventListener):
     def on_close(self, view):
-        raw_task = view.settings().get('task_id')
+        raw_task = view.settings().get('shebang.task_id')
         if raw_task:
             sublime.set_timeout(functools.partial(
                 pool.view_closed, Task(*json.loads(raw_task))
             ), 0)
 
     def on_activated(self, view):
-        if view.settings().has('shebang.errorline'):
+        if view.settings().has('shebang.err_ln'):
             pool.formatter.flash_errors(view)
 
 class ExecuteCommand(sublime_plugin.WindowCommand):
@@ -39,7 +38,8 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
         # treating the output buffer's contents as a script to be run
         if self._cached_run(prompt, kill): return
 
-        # if invoked from a script file, collect the subprocess details
+        # if invoked from a script file, collect the subprocess invocation 
+        # details into a cacheable dict (for future reruns)
         view = self.window.active_view()
         file_path = view.file_name()
         task_id = Task(file_path, view.window().id(), view.id())
@@ -49,7 +49,9 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
             except:
                 working_dir = os.environ('HOME')
         file_name = relpath(file_path, working_dir)
-        invocation=dict(arg_list=None, working_dir=working_dir, env=env.copy(), encoding=encoding, path=path)
+        invocation=dict(arg_list=None, working_dir=working_dir, 
+                        env=env.copy(), encoding=encoding, path=path,
+                        file_regex=file_regex, line_regex=line_regex)
         invocation['env'].update(view.settings().get('build_env',{}))
         invocation.update(kwargs)
         
@@ -65,6 +67,8 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
 
         # special handling if python is involved
         if file_path.endswith('.py') or 'python' in str(cmd):
+            if not invocation['file_regex']:
+                invocation['file_regex'] =  "^[ ]*File \"(...*?)\", line ([0-9]*)"
             ve_python = self._closest_virtualenv(file_path, virtualenv)
             if ve_python:
                 cmd = [relpath(ve_python, working_dir), '-u', file_name]
@@ -79,7 +83,6 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
                 cmd.insert(-1,'-u')
 
         invocation['arg_list'] = cmd
-        view.add_regions('shebang.errorline', [], '')
         if sublime.load_settings('Shebang.sublime-settings').get('save_on_run'):
             if view.is_dirty(): 
                 view.run_command('save')
@@ -91,7 +94,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
 
     def _cached_run(self, prompt, kill):
         view = self.window.active_view()
-        task_tuple = json.loads(view.settings().get("task_id", '[]'))
+        task_tuple = json.loads(view.settings().get("shebang.task_id", '[]'))
         if not task_tuple:
             return False
         
@@ -160,7 +163,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
         if prompt: return True
         view = self.window.active_view()
         fname = view.file_name()
-        task_token = view.settings().get("task_id")
+        task_token = view.settings().get("shebang.task_id")
         task_id = json.loads(task_token or '[]')
         if not task_id:
             task_id = (fname, self.window.id(), view.id())
@@ -173,3 +176,4 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
         or fname.lower().endswith('.py') \
         or view.substr(Region(0,2))=="#!":
             return not is_running
+ot is_running

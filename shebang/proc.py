@@ -17,13 +17,12 @@ class Task(tuple):
 class AsyncProcess(object):
     def __init__(self, arg_list, env, listener,
                 shell=False, encoding=None, task=None, 
-                working_dir=None, path=None):
+                **kwargs):
 
         self.listener = listener
         self.killed = False
         self.encoding = encoding
         self.task = task
-        self.cwd = working_dir
 
         self.start_time = time.time()
 

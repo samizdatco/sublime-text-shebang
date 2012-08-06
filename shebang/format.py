@@ -10,7 +10,7 @@ from sublime import Region
 class Formatter(object):
     # m_begin, m_output, m_result, m_end = list(u"☃☂☔☊")
     m_begin, m_output, m_result, m_end = list(u'\u200b\u200c\u200d\u2060')
-    _err = {}   # view ids with errorline info
+    _err = {} # view ids with errorline info
     
     def begin_run(self, view, pid, invocation):
         header = []
@@ -67,8 +67,12 @@ class Formatter(object):
     def fold_old(self, view):
         view.fold(view.find_by_selector('output.shebang'))
 
-    def completed_run(self, view, task_id, exit_code, elapsed, cwd):
+    def completed_run(self, view, task_id, info):
         view.set_read_only(False)
+
+        exit_code = info['exit_code']
+        elapsed = info['elapsed']
+        cwd = info['working_dir']
 
         begin = view.find_by_selector('comment.header.shebang')[-1]
         errstr = " %i"%exit_code if exit_code else ''
@@ -93,9 +97,13 @@ class Formatter(object):
                 return
 
             views = dict([(v.file_name(), v) for v in parent_win.views()])
-            re_file = re.compile(r'^[ ]*File \"(...*?)\", line ([0-9]*)', re.M)
 
             panel = parent_win.get_output_panel("shebang")
+            panel.settings().set("result_file_regex", info['file_regex'])
+            panel.settings().set("result_line_regex", info['line_regex'])
+            panel.settings().set("result_base_dir", info['working_dir'])
+            panel = parent_win.get_output_panel("shebang")
+
             panel.set_read_only(False)
             edit = panel.begin_edit()
             panel.insert(edit, panel.size(), run_body)
@@ -104,9 +112,10 @@ class Formatter(object):
             panel.set_read_only(True)
             parent_win.run_command("show_panel", {"panel": "output.shebang"})
 
+            re_file = re.compile(info['file_regex'], re.M)
             err_idx = defaultdict(list) # {w_id:[v1,v2,v3], ...}
             err_rgns = defaultdict(list) # {v_obj; [[a,b], [c,d], ...]}
-            for fn, lineno in reversed(re_file.findall(run_body, re.M)):
+            for fn, lineno in reversed(re_file.findall(run_body)):
                 file_path = join(cwd, fn)
                 if not exists(file_path) and exists(fn):
                     file_path = fn
@@ -118,35 +127,37 @@ class Formatter(object):
                     err_rgns[parent_view].append([errline.a, errline.b])
 
             for err_view, errs in err_rgns.items():
-                err_view.settings().set('shebang.errorline', errs)
+                err_view.settings().set('shebang.err_ln', errs)
                 err_view.settings().set('shebang.hop',"hop")
             if err_idx:
                 self._err[task_id] = dict(err_idx)
             elif task_id in self._err:
                 del self._err[task_id]
 
-            active_view = sublime.active_window().active_view()
-            if active_view.id() in err_idx[active_view.window().id()]:
-                self.flash_errors(active_view, focus=True)
+            # active_view = sublime.active_window().active_view()
+            for win in sublime.windows():
+                if win.active_view().id() in err_idx[win.id()]:
+                    self.flash_errors(win.active_view())
+        else:
+            # yay, no errors
+            self.clear_errors(task_id)
         
-        elif task_id in self._err:
-            del self._err[task_id] # yay, no errors
+    def clear_errors(self, task_id):
+        if task_id in self._err:
+            del self._err[task_id] 
 
-
-    def flash_errors(self, view, focus=False):
+    def flash_errors(self, view):
         err_free = True
         win_id, view_id = view.window().id(), view.id()
         for task_id, err_views in self._err.items():
             for w,v in err_views.items():
                 if win_id==w and view_id in v:
-                    print task_id
                     err_free = False
                     break
 
         if err_free:
-            print "no errs"
             view.erase_regions('shebang.mark')
-            view.settings().erase('shebang.errorline')
+            view.settings().erase('shebang.err_ln')
             view.settings().erase('shebang.hop')
             return
 
@@ -158,21 +169,13 @@ class Formatter(object):
             if ttl:
                 sublime.set_timeout(functools.partial(blinkenlights,ttl-1), 90)
 
-        blinkenlights.region = [Region(int(a),int(b)) for a,b in view.settings().get('shebang.errorline')]
+        blinkenlights.region = [Region(int(a),int(b)) for a,b in view.settings().get('shebang.err_ln')]
         blinkenlights()
 
         if view.settings().has('shebang.hop'):
             errline = blinkenlights.region[-1]
             view.show_at_center(errline)
             point = Region(errline.b,errline.b)
+            view.sel().clear()
             view.sel().add(point)
             view.settings().erase('shebang.hop')
-    
-            #     if parent_view and task_id.path==file_path:
-            #         errline = parent_view.split_by_newlines(Region(0,parent_view.size()))[int(lineno)-1]
-            #         parent_view.sel().clear()
-            #         focus = Region(errline.b,errline.b)
-            #         parent_view.sel().add(focus)
-            #         parent_view.show_at_center(errline)
-            #         parent_view.add_regions('shebang.errorline', [errline], 'invalid', '', sublime.DRAW_OUTLINED)
-            #         break
