@@ -7,9 +7,17 @@ import shlex
 import sublime, sublime_plugin
 from sublime import Region
 from os.path import dirname, relpath, exists
-from shebang import Task, AsyncProcess, Formatter, Multiplexer
-pool = Multiplexer()
+# from shebang import Task, AsyncProcess, Formatter, Multiplexer
 
+import shebang.format
+reload(shebang.format); Formatter = shebang.format.Formatter
+import shebang.proc
+reload(shebang.proc); Task = shebang.proc.Task; AsyncProcess = shebang.proc.AsyncProcess
+import shebang.mux
+reload(shebang.mux); Multiplexer = shebang.mux.Multiplexer
+
+
+pool = Multiplexer()
 class OutputViewWatcher(sublime_plugin.EventListener):
     def on_close(self, view):
         raw_task = view.settings().get('task_id')
@@ -18,6 +26,10 @@ class OutputViewWatcher(sublime_plugin.EventListener):
                 pool.view_closed, Task(*json.loads(raw_task))
             ), 0)
 
+    def on_activated(self, view):
+        if view.settings().has('shebang.errorline'):
+            pool.formatter.flash_errors(view)
+
 class ExecuteCommand(sublime_plugin.WindowCommand):
     def run(self, cmd = None, file_regex = "", line_regex = "", working_dir = "",
             encoding = "utf-8", env = {}, quiet = False, kill = False, 
@@ -25,7 +37,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
 
         # if invoked from an output buffer, use the cached invocation rather than
         # treating the output buffer's contents as a script to be run
-        if self.cached_run(prompt, kill): return
+        if self._cached_run(prompt, kill): return
 
         # if invoked from a script file, collect the subprocess details
         view = self.window.active_view()
@@ -67,15 +79,17 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
                 cmd.insert(-1,'-u')
 
         invocation['arg_list'] = cmd
+        view.add_regions('shebang.errorline', [], '')
         if sublime.load_settings('Shebang.sublime-settings').get('save_on_run'):
-            view.run_command('save')
+            if view.is_dirty(): 
+                view.run_command('save')
 
         if prompt:
             self._prompt_then_run(task_id, invocation)
         else:
             pool.spawn_worker(task_id, invocation)
 
-    def cached_run(self, prompt, kill):
+    def _cached_run(self, prompt, kill):
         view = self.window.active_view()
         task_tuple = json.loads(view.settings().get("task_id", '[]'))
         if not task_tuple:

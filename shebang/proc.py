@@ -23,6 +23,7 @@ class AsyncProcess(object):
         self.killed = False
         self.encoding = encoding
         self.task = task
+        self.cwd = working_dir
 
         self.start_time = time.time()
 

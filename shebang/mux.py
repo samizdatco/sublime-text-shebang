@@ -142,7 +142,7 @@ class Multiplexer(object):
         view = self.get_task_view(proc.task)
         elapsed = time.time() - proc.start_time
         exit_code = proc.exit_code()
-        self.formatter.completed_run(view, proc.task, exit_code, elapsed)
+        self.formatter.completed_run(view, proc.task, exit_code, elapsed, proc.cwd)
         del self._procs[proc.task]
 
     # event handlers for the async proc running behind the scenes
