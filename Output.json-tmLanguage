@@ -4,19 +4,33 @@
   "foldingStartMarker":"\u200c",
   "foldingStopMarker":"\u200d",
   "repository": {
+
     "pythonTraceback":{
-      "begin":"Traceback \\(most recent call last\\)",
+      "begin":"(Traceback \\(most recent call last\\):)",
       "end":"(?=\u200d)",
-      "name":"meta.tag",
+
+      "beginCaptures":{
+        "1": { "name": "meta.tag" }
+      },
 
       "patterns": [
         {  
-           "match": "File \"([^\"]+)\", line (\\d+)",
+           "match": "File \"([^\"]+)\", line (\\d+)(?:, in)?",
+           "name":"meta.tag",
            "captures": {
                "1": { "name": "keyword" },
                "2": { "name": "keyword" }
            }
-        }
+        },
+        {  
+           "match": "^([A-Z].*)",
+           "captures": {
+               "1": { "name": "entity" },
+               "2": { "name": "entity" }
+           }
+        },
+        { "include":"source.python"}
+
       ]
     }
 
@@ -57,9 +71,9 @@
 
     {
       "begin":"(?<=\u200d)",
-      "end":"(\\d+)?(?=\u2060)",
+      "end":"([\\d⓵⓶⓷⓸⓹⓺⓻⓼⓽⓾]+)?(?=\u2060)",
       "endCaptures":{
-        "1": { "name": "invalid.deprecated.shebang" }
+        "1": { "name": "entity" }
       },
       "name":"support.section",
       "patterns":[

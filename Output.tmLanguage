@@ -73,13 +73,13 @@
 			<key>comment</key>
 			<string>script-complete footer</string>
 			<key>end</key>
-			<string>(\d+)?(?=⁠)</string>
+			<string>([\d⓵⓶⓷⓸⓹⓺⓻⓼⓽⓾]+)?(?=⁠)</string>
 			<key>endCaptures</key>
 			<dict>
 				<key>1</key>
 				<dict>
 					<key>name</key>
-					<string>invalid.deprecated.shebang</string>
+					<string>entity</string>
 				</dict>
 			</dict>
 			<key>name</key>
@@ -106,11 +106,17 @@
 		<key>pythonTraceback</key>
 		<dict>
 			<key>begin</key>
-			<string>Traceback \(most recent call last\)</string>
+			<string>(Traceback \(most recent call last\):)</string>
+			<key>beginCaptures</key>
+			<dict>
+				<key>1</key>
+				<dict>
+					<key>name</key>
+					<string>meta.tag</string>
+				</dict>
+			</dict>
 			<key>end</key>
 			<string>(?=‍)</string>
-			<key>name</key>
-			<string>meta.tag</string>
 			<key>patterns</key>
 			<array>
 				<dict>
@@ -128,7 +134,30 @@
 						</dict>
 					</dict>
 					<key>match</key>
-					<string>File "([^"]+)", line (\d+)</string>
+					<string>File "([^"]+)", line (\d+)(?:, in)?</string>
+					<key>name</key>
+					<string>meta.tag</string>
+				</dict>
+				<dict>
+					<key>captures</key>
+					<dict>
+						<key>1</key>
+						<dict>
+							<key>name</key>
+							<string>entity</string>
+						</dict>
+						<key>2</key>
+						<dict>
+							<key>name</key>
+							<string>entity</string>
+						</dict>
+					</dict>
+					<key>match</key>
+					<string>^([A-Z].*)</string>
+				</dict>
+				<dict>
+					<key>include</key>
+					<string>source.python</string>
 				</dict>
 			</array>
 		</dict>
