@@ -1,5 +1,9 @@
 [
   { 
+    "caption": "!!: Browse Stack Trace…", 
+    "command": "last_stack_trace"
+  },
+  { 
     "caption": "#!: Run Script", 
     "command": "execute"
   },

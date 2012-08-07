@@ -29,10 +29,36 @@ class OutputViewWatcher(sublime_plugin.EventListener):
         if view.settings().has('shebang.err_ln'):
             pool.formatter.flash_errors(view)
 
+class LastStackTraceCommand(sublime_plugin.WindowCommand):
+    def run(self, *args, **kwargs):
+        task_id = self._task_id()
+        if task_id:
+            pool.formatter.browse_stacktrace(task_id,pool._invs.get(task_id))
+
+    def is_enabled(self):
+        task_id = self._task_id()
+        return (task_id and task_id in pool.formatter._err)
+
+    def _task_id(self, view=None):
+        if not view:
+            view = self.window.active_view()
+        if view.settings().has('shebang.task_id'):
+            raw_task = json.loads(view.settings().get('shebang.task_id','[]'))
+        elif view.settings().has('shebang.err_ln'):
+            raw_task = (view.file_name(), view.window().id(), view.id())
+        
+        if raw_task:    
+            return Task(*raw_task)
+
 class ExecuteCommand(sublime_plugin.WindowCommand):
     def run(self, cmd = None, file_regex = "", line_regex = "", working_dir = "",
             encoding = "utf-8", env = {}, quiet = False, kill = False, 
             virtualenv=None, prompt=False, path=None, restart=False, **kwargs):
+
+
+        if kwargs.get('foo'):
+            print "DOUBLE CLICKED", self.window.active_view().id()
+            return
 
         # if invoked from an output buffer, use the cached invocation rather than
         # treating the output buffer's contents as a script to be run
@@ -176,4 +202,3 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
         or fname.lower().endswith('.py') \
         or view.substr(Region(0,2))=="#!":
             return not is_running
-ot is_running
