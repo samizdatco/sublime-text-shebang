@@ -3,10 +3,12 @@ import os, sys, re
 import datetime
 import sublime
 import functools
+import time
 from collections import defaultdict
 from os.path import join, exists, normpath, relpath, basename, dirname
 from itertools import izip_longest as izipl
 from sublime import Region
+from proc import Task
 
 class Formatter(object):
     # m_begin, m_output, m_result, m_end = list(u"☃☂☔☊")
@@ -38,8 +40,13 @@ class Formatter(object):
         # Normalize newlines, Sublime Text always uses a single \n separator
         # in memory.
         txt = txt.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # todo: should also only bother scrolling if the new end is beyond 
+        # the view bounds
         selection_was_at_end = (len(view.sel()) == 1
             and view.sel()[0] == Region(view.size()))
+        # </todo>
+
         view.set_read_only(False)
         edit = view.begin_edit()
         view.insert(edit, view.size(), txt)
@@ -72,28 +79,26 @@ class Formatter(object):
     def fold_old(self, view):
         view.fold(view.find_by_selector('output.shebang'))
 
-    def completed_run(self, view, task_id, info):
-        view.set_read_only(False)
 
+    def completed_run(self, view, task_id, info):
         exit_code = info['exit_code']
         elapsed = info['elapsed']
-        cwd = info['working_dir']
 
         begin = view.find_by_selector('comment.header.shebang')[-1]
         run_body = view.substr(Region(begin.b+3, view.size()))
 
+        # write the post-run footer with time, bytes, and exit code
         errstr = ''
         if 0 < exit_code < 11:
             errstr = u"⓵⓶⓷⓸⓹⓺⓻⓼⓽⓾"[exit_code-1]
         elif exit_code:
             errstr = str(exit_code)
-
-
         sizestr = self._pretty('size',view.size()-begin.b-3)
         timestr = self._pretty('time', elapsed)
-        
-
         self.append_txt(view, u'\n%s%s %s %s%s\n'%(self.m_result,timestr,sizestr,errstr, self.m_end))
+
+        # clip out the pid from the pre-run header
+        view.set_read_only(False)
         edit = view.begin_edit()
         # view.insert(edit, view.size(), u'\n%s%s %s %s%s\n'%(self.m_result,timestr,sizestr,errstr, self.m_end))
         for r in view.find_by_selector('keyword.pid.shebang'):
@@ -103,142 +108,160 @@ class Formatter(object):
         view.erase_status("shebang:running")
 
 
-
+        # if exit wasn't clean, 
         status = info['arg_list'] if info.get('shell') else basename(info['task'].path)
-        if exit_code:
+        if not exit_code:
+            # yay, no errors
+            view.set_name(u'✓ %s'%(status))
+            self.clear_errors(task_id)
+        else:
             view.set_name(u'%s %s'%(errstr, status))
 
-            try:
-                parent_win = [w for w in sublime.windows() if w.id()==task_id.window][0]
-            except IndexError:
-                return
+            # examine the output for a recognizable traceback (for now just python...)
+            stack_frames, err_body = self._detect_stacktrace(task_id, info, run_body)
+            self._display_stacktrace(task_id, info, err_body)
 
-            views = dict([(v.file_name(), v) for v in parent_win.views()])
+            err_paths = [f['path'] for f in stack_frames]
+            err_gen = "%x"%hash(time.time())
 
+            self._err[task_id] = dict(stack=stack_frames, 
+                                      gen=err_gen, 
+                                      cwd=info['working_dir'] )
 
-            re_file = re.compile(info['file_regex'], re.M)
-            stack_frames = []
-            for m in re_file.finditer(run_body):
-                fn = m.group(1)
-                file_path = join(cwd, fn)
-                if not exists(file_path) and exists(fn):
-                    file_path = fn
-                stack_frames.append(dict(start=m.start(), end=m.end(), path=file_path, line=int(m.group(2))))
+            for win, view in ((w,v) for w in sublime.windows() for v in w.views() if v.file_name() in err_paths):
+                file_path = view.file_name()
+                stack = [ (f['path']==file_path and f['line']) for f in stack_frames]
+                for lineno in reversed(stack):
+                    if lineno is not False:
+                        depth = stack.index(lineno)
+                        view.settings().set('shebang.goto', depth)
+                        break
+                view.settings().set('shebang.stacktrace', {"task":[task_id.path, task_id.view], 
+                                                           "gen":err_gen,
+                                                           "stack":stack, 
+                                                           "depth":depth})
+            
+            for win in sublime.windows():
+                if win.active_view().file_name() in err_paths:
+                    self.flash_errors(win.active_view())
 
-            for first, next in izipl(stack_frames, stack_frames[1:]):
-                if next:
-                    rng = Region(first['end'], next['start'])
-                else:
-                    rng = Region(first['end'], len(run_body))
-                # print first['path']
-                # print "]%s["%run_body[rng.a:rng.b]
+    def _display_stacktrace(self, task_id, inv, err_body):
+        try:
+            parent_win = [w for w in sublime.windows() for v in w.views() if v.id()==task_id.view][0]
+        except IndexError:
+            print "source script no longer open..."
+            return
 
-                m = re.search(r'in ([^\n]*)\n([^\n]+)\n', run_body[rng.a:rng.b], re.S)
-                if m:
-                    # first['line'] = "%s%s"%(m.group(1).strip(), 
-                                            # "" if m.group(1).endswith('>') else "()")
-                    # first['context'] = m.group(2).strip()
-                    first['context'] = dict(fn="%s%s"%(m.group(1).strip(), 
-                                               "" if m.group(1).endswith('>') else "()"),
-                                            src=m.group(2).strip() )
-                    
-                    # first['context'] = "%s%s: %s"%(m.group(1).strip(), 
-                    #     "" if m.group(1).endswith('>') else "()",
-                    #     m.group(2).strip())
-
+        # only show the error panel if we're not looking at the output buffer
+        if sublime.active_window().active_view().settings().has('shebang.task_id'):
+            parent_win.run_command("hide_panel", {"panel": "output.shebang"})
+        elif err_body:
             panel = parent_win.get_output_panel("shebang")
-            panel.settings().set("result_file_regex", info['file_regex'])
-            panel.settings().set("result_line_regex", info['line_regex'])
-            panel.settings().set("result_base_dir", info['working_dir'])
+            panel.settings().set("result_file_regex", inv['file_regex'])
+            panel.settings().set("result_line_regex", inv['line_regex'])
+            panel.settings().set("result_base_dir", inv['working_dir'])
             panel = parent_win.get_output_panel("shebang")
-
-            if stack_frames:
-                run_body = run_body[stack_frames[0]['start']:]
-
             panel.set_read_only(False)
             edit = panel.begin_edit()
-            panel.insert(edit, panel.size(), run_body)
+            panel.insert(edit, panel.size(), err_body)
             panel.show(panel.size())
             panel.end_edit(edit)
             panel.set_read_only(True)
             parent_win.run_command("show_panel", {"panel": "output.shebang"})
 
-            err_idx = defaultdict(set) # {w_id:[v1,v2,v3], ...}
-            err_rgns = defaultdict(list) # {v_obj: [[a,b], [c,d], ...]}
-            for frame in reversed(stack_frames):
-                parent_view = views.get(frame['path'])
-                if parent_view:
-                    err_idx[parent_win.id()].update([parent_view.id()])
-                    errline = parent_view.split_by_newlines(Region(0,parent_view.size()))[frame['line']-1]
-                    err_rgns[parent_view].append([errline.a, errline.b])
+    def _detect_stacktrace(self, task_id, inv, run_body):
+        re_file = re.compile(inv['file_regex'], re.M)
+        m = re_file.search(run_body)
+        if not m: return None, None
+        err_body = run_body[m.start():]
 
-            for err_view, errs in err_rgns.items():
-                err_view.settings().set('shebang.err_ln', errs)
-                err_view.settings().set('shebang.hop',"hop")
-            if err_idx:
-                self._err[task_id] = dict(views=dict((k,list(v)) for k,v in err_idx.items()), 
-                                          trace=stack_frames)
-            elif task_id in self._err:
-                del self._err[task_id]
+        # at a minimum find the filepaths and linenos for each frame of the trace
+        stack_frames = []
+        for m in re_file.finditer(err_body):
+            fn = m.group(1)
+            file_path = join(inv['working_dir'], fn)
+            if not exists(file_path) and exists(fn):
+                file_path = fn
+            stack_frames.append(dict(start=m.start(), end=m.end(), path=file_path, line=int(m.group(2))))
 
-            for win in sublime.windows():
-                if win.active_view().id() in err_idx[win.id()]:
-                    self.flash_errors(win.active_view())
-        else:
-            # yay, no errors
-            view.set_name(u'✓ %s'%(status))
+        # cheat a bit for python and include the echo'd source line for each frame
+        for first, next in izipl(stack_frames, stack_frames[1:]):
+            if next:
+                rng = Region(first['end'], next['start'])
+            else:
+                rng = Region(first['end'], len(err_body))
 
-            # view.set_name(u'%s (%s, %s)'%(status,timestr,sizestr))
-            self.clear_errors(task_id)
+            m = re.search(r'in ([^\n]*)\n([^\n]+)\n', err_body[rng.a:rng.b], re.S)
+            if m:
+                first['context'] = dict(fn="%s%s"%(m.group(1).strip(), 
+                                           "" if m.group(1).endswith('>') else "()"),
+                                        src=m.group(2).strip() )
+            del first['start']
+            del first['end']
+        return stack_frames, err_body
         
     def clear_errors(self, task_id):
         if task_id in self._err:
+            # print "clear", task_id, self._err.get(task_id,{}).get('gen')
             del self._err[task_id] 
 
     def flash_errors(self, view):
-        err_free = True
-        win_id, view_id = view.window().id(), view.id()
-        for task_id, err in self._err.items():
-            for w,v in err['views'].items():
-                if win_id==w and view_id in v:
-                    err_free = False
-                    break
+        if not self.has_errors(view): return
 
-        if err_free:
-            view.erase_regions('shebang.mark')
-            view.settings().erase('shebang.err_ln')
-            view.settings().erase('shebang.hop')
-            return
+        view.erase_regions('shebang.mark')
+        err = view.settings().get('shebang.stacktrace')
+        goto = view.settings().get('shebang.goto')
+        if goto is not None:
+            err['depth'] = goto
+            view.settings().set('shebang.stacktrace', err)
+            lineno = int(err['stack'][int(err['depth'])])
+            view.window().open_file("%s:%i"%(view.file_name(), lineno), sublime.ENCODED_POSITION)
 
         def blinkenlights(ttl=4):
             if ttl%2:
-                view.add_regions('shebang.mark', [blinkenlights.region[0]], 'comment', '', sublime.DRAW_OUTLINED)    
+                view.add_regions('shebang.mark', [blinkenlights.errline], 'comment', '', sublime.DRAW_OUTLINED)    
             else:
-                view.add_regions('shebang.mark', [blinkenlights.region[0]], 'comment', '', sublime.HIDDEN)    
+                view.add_regions('shebang.mark', [blinkenlights.errline], 'comment', '', sublime.HIDDEN)    
             if ttl:
                 sublime.set_timeout(functools.partial(blinkenlights,ttl-1), 90)
-
-        blinkenlights.region = [Region(int(a),int(b)) for a,b in view.settings().get('shebang.err_ln')]
+        lineno = int(err['stack'][int(err['depth'])])
+        blinkenlights.errline = view.split_by_newlines(Region(0,view.size()))[lineno-1]
         sublime.set_timeout(functools.partial(blinkenlights), 90)
 
-        if view.settings().has('shebang.hop'):
-            errline = blinkenlights.region[0]
-            view.show_at_center(errline)
-            # point = Region(errline.b,errline.b)
-            # view.sel().clear()
-            # view.sel().add(point)
-            view.settings().erase('shebang.hop')
+        if goto is not None:
+            view.show_at_center(blinkenlights.errline)
+            view.settings().erase('shebang.goto')
 
-    def browse_stacktrace(self, task_id, inv):
+    def has_errors(self, view):
+        task_id = Task(view)
+        if task_id:
+            return task_id in self._err
+
+        trace = view.settings().get('shebang.stacktrace')
+        trace_gen = view.settings().get('shebang.stacktrace',{}).get('gen')
+        task_id = Task(*trace['task'])
+        if trace and task_id in self._err:
+            if trace_gen == self._err[task_id]['gen']:
+                return True
+
+        view.settings().erase('shebang.stacktrace')
+        view.settings().erase('shebang.goto')
+        view.erase_regions('shebang.mark')
+        return False
+
+    def browse_stacktrace(self, task_id):
         err = self._err.get(task_id)
         if err:
             file_paths = []
             ui = []
 
-            for frame in err['trace']:
+            # from pprint import pprint
+            # pprint(err)
+
+            for frame in err['stack']:
                 pth = frame['path']
                 file_paths.append('%s:%i'%(pth, frame['line']))
-                rel_pth = relpath(pth, inv['working_dir'])
+                rel_pth = relpath(pth, err['cwd'])
                 if rel_pth.startswith('..'):
                     home_pth = re.sub(r'^'+os.environ['HOME'], u'~', pth)
                     if len(home_pth) < len(rel_pth):
@@ -257,23 +280,25 @@ class Formatter(object):
                     ui.append("%s: %i"%(rel_pth,frame['line']))
 
             def outcome(idx):
-                if idx>0:
-                    for win in (w for w in sublime.windows() if w.id()==task_id.window):
-                        return win.open_file(file_paths[idx],sublime.ENCODED_POSITION)
-                    sublime.active_window().open_file(file_paths[idx],sublime.ENCODED_POSITION)
+                if idx>=0:
+                    file_path = err['stack'][idx]['path']
+                    lineno = err['stack'][idx]['line']
+                    for win in (w for w in sublime.windows() for v in w.views() if v.id()==task_id.view):
+                        match = [v for v in win.views() if v.file_name()==file_path]
+                        if match:
+                            view = match[0]
+                            view.settings().set('shebang.goto',idx)
+                            if view.id()==sublime.active_window().active_view().id():
+                                self.flash_errors(view)
+                            else:
+                                win.open_file(file_path)
+                            return
 
-
+                    view = sublime.active_window().open_file(file_path)
+                    stack = [ (f['path']==file_path and f['line']) for f in err['stack']]
+                    view.settings().set('shebang.goto', idx)
+                    view.settings().set('shebang.stacktrace', {"task":[task_id.path, task_id.view], 
+                                                               "gen":err['gen'],
+                                                               "stack":stack, 
+                                                               "depth":idx})
             sublime.active_window().show_quick_panel(ui, outcome)
-            #don't forget to mark the error lines in the newly opened view...
-
-
-
-
-
-
-
-
-
-
-
-
