@@ -6,6 +6,11 @@
   // whether to save the current buffer before attempting to run it
   "save_on_run": true,
 
+  // whether to group all the output buffers that result from different scripts
+  // in a separate window. if false, output buffers will open in a new tab next 
+  // to the script being run
+  "output_separate_window":false,
+
   // (python) configure the pattern to be used for finding the proper 
   // virtualenv for a given script. the pattern can either represents a 
   // fixed path (beginning with / or ~), or a subdirectory name that will
