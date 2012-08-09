@@ -28,7 +28,7 @@ class Formatter(object):
 
         self.fold_old(view)
 
-        status = inv['cmd'] if inv.get('shell') else basename(inv['task'].path)
+        status = inv['arg_list'] if inv.get('shell') else basename(inv['task'].path)
         view.set_name(u'… %s'%status)
 
         timestamp = (u"%s"%datetime.datetime.now()).split('.')[0].replace('-','/')
@@ -237,9 +237,9 @@ class Formatter(object):
         if task_id:
             return task_id in self._err
 
-        trace = view.settings().get('shebang.stacktrace')
-        trace_gen = view.settings().get('shebang.stacktrace',{}).get('gen')
-        task_id = Task(*trace['task'])
+        trace = view.settings().get('shebang.stacktrace', {})
+        trace_gen = trace.get('gen')
+        task_id = Task(*trace.get('task',[None]))
         if trace and task_id in self._err:
             if trace_gen == self._err[task_id]['gen']:
                 return True

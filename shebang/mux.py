@@ -85,7 +85,7 @@ class Multiplexer(object):
         if create:
             same_window = not self._setting('output_separate_window')
             if same_window:
-                win = self.script_win(task_id)
+                win = self.script_win(task_id) or sublime.active_window()
             else:
                 pass # need something like _wakeup to deal with global window identification
                 win = self.get_frame()
