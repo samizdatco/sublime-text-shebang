@@ -23,7 +23,7 @@ download the current version from the [project page][2] or clone the git reposit
 Usage
 -----
 
-The plugin adds four commands to the command palette. They can be run from either a source script or its counterpart output window.
+The plugin adds five commands to the command palette. They can be run from either a source script or its counterpart output window.
 
  - **Run Script**  
    *run the current file*  
@@ -44,6 +44,12 @@ disabled in `Shebang.sublime-settings`.
 In addition to its appearance in the commands palette, this can also be invoked by typing
 `ctrl-c` in either the script’s view or its corresponding output buffer. 
 
+ - **Browse Stack Trace**  
+   *Jump to an error line*  
+After running a script that terminated abnormally, jump to any of the lines in the resulting
+stack trace (currently python-only). 
+
+
 Configuration
 -------------
 
@@ -56,6 +62,9 @@ Within the file you can redefine default behaviors:
 
  - `save_on_run` *true*  
 Whether to save the current script buffer prior to running it.
+
+ - `use_separate_window` *false*  
+Whether to group output buffers in a separate window or open them next to the source script’s tab.
 
  - `virtualenv` *null*  
 A path (or path fragment) in which a virtualenv python environment can be found. If the value is an absolute or home-relative path, Shebang will simply use the interpreter at that path.  

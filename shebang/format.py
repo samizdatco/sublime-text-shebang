@@ -208,7 +208,7 @@ class Formatter(object):
             err['depth'] = goto
             view.settings().set('shebang.stacktrace', err)
             lineno = int(err['stack'][int(err['depth'])])
-            if not sublime.load_settings('Shebang.sublime-settings').get('output_separate_window'):
+            if not sublime.load_settings('Shebang.sublime-settings').get('use_separate_window'):
                 view.window().open_file("%s:%i"%(view.file_name(), lineno), sublime.ENCODED_POSITION)
 
         def blinkenlights(ttl=4):

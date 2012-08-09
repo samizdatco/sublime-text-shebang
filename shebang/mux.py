@@ -95,7 +95,7 @@ class Multiplexer(object):
                 return view
 
         if create:
-            same_window = not self._setting('output_separate_window')
+            same_window = not self._setting('use_separate_window')
             if same_window:
                 win = self.script_win(task_id) or sublime.active_window()
             else:

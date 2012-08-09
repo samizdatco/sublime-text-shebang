@@ -9,7 +9,7 @@
   // whether to group all the output buffers that result from different scripts
   // in a separate window. if false, output buffers will open in a new tab next 
   // to the script being run
-  "output_separate_window":false,
+  "use_separate_window":false,
 
   // (python) configure the pattern to be used for finding the proper 
   // virtualenv for a given script. the pattern can either represents a 
