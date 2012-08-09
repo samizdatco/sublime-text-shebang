@@ -5,8 +5,8 @@ import sublime
 import functools
 import time
 from collections import defaultdict
-from os.path import join, exists, normpath, relpath, basename, dirname
-from itertools import izip_longest as izipl
+from os.path import relpath, basename
+
 from sublime import Region
 from proc import Task
 
@@ -26,7 +26,7 @@ class Formatter(object):
             header.append(u" dir: %s\n"%inv['working_dir'].replace(os.environ['HOME'],'~'))
             header.append(u"path: %s\n\n"%inv['env'].get('PATH',os.environ['PATH']))
 
-        self.fold_old(view)
+        self.fold_prior_output(view)
 
         status = inv['arg_list'] if inv.get('shell') else basename(inv['task'].path)
         view.set_name(u'… %s'%status)
@@ -76,78 +76,56 @@ class Formatter(object):
             frac = ('%1.1f'%val).replace('.0','')
             return '%s %s'%(frac,sfix[0])
             
-    def fold_old(self, view):
+    def fold_prior_output(self, view):
         view.fold(view.find_by_selector('output.shebang'))
 
-
-    def completed_run(self, view, task_id, info):
+    def completed_run(self, view, task_id, info, run_body):
         exit_code = info['exit_code']
         elapsed = info['elapsed']
 
-        begin = view.find_by_selector('comment.header.shebang')[-1]
-        run_body = view.substr(Region(begin.b+3, view.size()))
-
         # write the post-run footer with time, bytes, and exit code
-        errstr = ''
+        errstr = u'✓'
         if 0 < exit_code < 11:
             errstr = u"⓵⓶⓷⓸⓹⓺⓻⓼⓽⓾"[exit_code-1]
         elif exit_code:
             errstr = str(exit_code)
-        sizestr = self._pretty('size',view.size()-begin.b-3)
+
+        # sizestr = self._pretty('size',view.size()-begin.b-3)
+        sizestr = self._pretty('size',len(run_body))
         timestr = self._pretty('time', elapsed)
         self.append_txt(view, u'\n%s%s %s %s%s\n'%(self.m_result,timestr,sizestr,errstr, self.m_end))
+
+        # update tab label
+        status = info['arg_list'] if info.get('shell') else basename(info['task'].path)
+        view.set_name(u'%s %s'%(errstr,status))
 
         # clip out the pid from the pre-run header
         view.set_read_only(False)
         edit = view.begin_edit()
-        # view.insert(edit, view.size(), u'\n%s%s %s %s%s\n'%(self.m_result,timestr,sizestr,errstr, self.m_end))
         for r in view.find_by_selector('keyword.pid.shebang'):
             view.erase(edit, Region(r.a-2, r.b+1))
         view.end_edit(edit)
         view.set_read_only(True)
         view.erase_status("shebang:running")
 
+    def zombie_quit(self, view, task_id):
+        self.append_txt(view, u'\n\n%sBroken pipe ⚠%s\n'%(self.m_result, self.m_end))
+        view.set_read_only(False)
+        edit = view.begin_edit()
+        for r in view.find_by_selector('keyword.pid.shebang'):
+            view.erase(edit, Region(r.a-2, r.b+1))
+        view.end_edit(edit)
+        view.set_read_only(True)
 
-        # if exit wasn't clean, 
-        status = info['arg_list'] if info.get('shell') else basename(info['task'].path)
-        if not exit_code:
-            # yay, no errors
-            view.set_name(u'✓ %s'%(status))
-            self.clear_errors(task_id)
-        else:
-            view.set_name(u'%s %s'%(errstr, status))
+        self.fold_prior_output(view)        
+        info = json.loads(view.settings().get("shebang.invocation", '{}'))
+        status = info['arg_list'] if info.get('shell') else basename(task_id.path)
+        view.set_name(u"⚠ %s"%status)
+        view.erase_status("shebang:running")
 
-            # examine the output for a recognizable traceback (for now just python...)
-            stack_frames, err_body = self._detect_stacktrace(task_id, info, run_body)
-            self._display_stacktrace(task_id, info, err_body)
-
-            err_paths = [f['path'] for f in stack_frames]
-            err_gen = "%x"%hash(time.time())
-
-            self._err[task_id] = dict(stack=stack_frames, 
-                                      gen=err_gen, 
-                                      cwd=info['working_dir'] )
-
-            for win, view in ((w,v) for w in sublime.windows() for v in w.views() if v.file_name() in err_paths):
-                file_path = view.file_name()
-                stack = [ (f['path']==file_path and f['line']) for f in stack_frames]
-                for lineno in reversed(stack):
-                    if lineno is not False:
-                        depth = stack.index(lineno)
-                        view.settings().set('shebang.goto', depth)
-                        break
-                view.settings().set('shebang.stacktrace', {"task":[task_id.path, task_id.view], 
-                                                           "gen":err_gen,
-                                                           "stack":stack, 
-                                                           "depth":depth})
-            
-            for win in sublime.windows():
-                if win.active_view().file_name() in err_paths:
-                    self.flash_errors(win.active_view())
-
-    def _display_stacktrace(self, task_id, inv, err_body):
+    def display_stacktrace_panel(self, err_body, inv):
         try:
-            parent_win = [w for w in sublime.windows() for v in w.views() if v.id()==task_id.view][0]
+            parent_win = [w for w in sublime.windows() for v in w.views() if v.id()==inv['task'].view][0]
         except IndexError:
             print "source script no longer open..."
             return
@@ -168,46 +146,61 @@ class Formatter(object):
             panel.end_edit(edit)
             panel.set_read_only(True)
             parent_win.run_command("show_panel", {"panel": "output.shebang"})
-
-    def _detect_stacktrace(self, task_id, inv, run_body):
-        re_file = re.compile(inv['file_regex'], re.M)
-        m = re_file.search(run_body)
-        if not m: return None, None
-        err_body = run_body[m.start():]
-
-        # at a minimum find the filepaths and linenos for each frame of the trace
-        stack_frames = []
-        for m in re_file.finditer(err_body):
-            fn = m.group(1)
-            file_path = join(inv['working_dir'], fn)
-            if not exists(file_path) and exists(fn):
-                file_path = fn
-            stack_frames.append(dict(start=m.start(), end=m.end(), path=file_path, line=int(m.group(2))))
-
-        # cheat a bit for python and include the echo'd source line for each frame
-        for first, next in izipl(stack_frames, stack_frames[1:]):
-            if next:
-                rng = Region(first['end'], next['start'])
-            else:
-                rng = Region(first['end'], len(err_body))
-
-            m = re.search(r'in ([^\n]*)\n([^\n]+)\n', err_body[rng.a:rng.b], re.S)
-            if m:
-                first['context'] = dict(fn="%s%s"%(m.group(1).strip(), 
-                                           "" if m.group(1).endswith('>') else "()"),
-                                        src=m.group(2).strip() )
-            del first['start']
-            del first['end']
-        return stack_frames, err_body
         
-    def clear_errors(self, task_id):
-        if task_id in self._err:
-            # print "clear", task_id, self._err.get(task_id,{}).get('gen')
-            del self._err[task_id] 
+    def display_stacktrace_menu(self, task_id, err):
+        file_paths = []
+        ui = []
+
+        for frame in err['stack']:
+            pth = frame['path']
+            file_paths.append('%s:%i'%(pth, frame['line']))
+            rel_pth = relpath(pth, err['cwd'])
+            if rel_pth.startswith('..'):
+                home_pth = re.sub(r'^'+os.environ['HOME'], u'~', pth)
+                if len(home_pth) < len(rel_pth):
+                    rel_pth = home_pth
+            if len(pth) < len(rel_pth):
+                rel_pth = pth
+
+            if len(rel_pth)>48:
+                rel_pth = u"%s…%s"%(rel_pth[:24], rel_pth[-24:])
+
+            ctx = frame.get('context')
+            if ctx:
+                # ui.append(["%s: %i"%(rel_pth,frame['line']), ctx])
+                ui.append(["%s: %s"%(rel_pth,ctx['fn']), ctx['src']])
+            else:
+                ui.append("%s: %i"%(rel_pth,frame['line']))
+
+        def jump_to_stack_frame(idx):
+            if idx>=0:
+                file_path = err['stack'][idx]['path']
+                lineno = err['stack'][idx]['line']
+                parent_win = sublime.active_window()
+                print [w for w in sublime.windows() for v in w.views() if v.id()==task_id.view]
+                for win in (w for w in sublime.windows() for v in w.views() if v.id()==task_id.view):
+                    match = [v for v in win.views() if v.file_name()==file_path]
+                    if match:
+                        view = match[0]
+                        view.settings().set('shebang.goto',idx)
+                        if view.id()==sublime.active_window().active_view().id():
+                            self.flash_errors(view)
+                        else:
+                            win.open_file(file_path)
+                        return
+                    else:
+                        parent_win = win
+
+                view = parent_win.open_file("%s:%i"%(file_path, lineno), sublime.ENCODED_POSITION)
+                stack = [ (f['path']==file_path and f['line']) for f in err['stack']]
+                view.settings().set('shebang.goto', idx)
+                view.settings().set('shebang.stacktrace', {"task":[task_id.path, task_id.view], 
+                                                           "gen":err['gen'],
+                                                           "stack":stack, 
+                                                           "depth":idx})
+        sublime.active_window().show_quick_panel(ui, jump_to_stack_frame)
 
     def flash_errors(self, view):
-        if not self.has_errors(view): return
-
         view.erase_regions('shebang.mark')
         err = view.settings().get('shebang.stacktrace')
         goto = view.settings().get('shebang.goto')
@@ -215,7 +208,8 @@ class Formatter(object):
             err['depth'] = goto
             view.settings().set('shebang.stacktrace', err)
             lineno = int(err['stack'][int(err['depth'])])
-            view.window().open_file("%s:%i"%(view.file_name(), lineno), sublime.ENCODED_POSITION)
+            if not sublime.load_settings('Shebang.sublime-settings').get('output_separate_window'):
+                view.window().open_file("%s:%i"%(view.file_name(), lineno), sublime.ENCODED_POSITION)
 
         def blinkenlights(ttl=4):
             if ttl%2:
@@ -231,74 +225,3 @@ class Formatter(object):
         if goto is not None:
             view.show_at_center(blinkenlights.errline)
             view.settings().erase('shebang.goto')
-
-    def has_errors(self, view):
-        task_id = Task(view)
-        if task_id:
-            return task_id in self._err
-
-        trace = view.settings().get('shebang.stacktrace', {})
-        trace_gen = trace.get('gen')
-        task_id = Task(*trace.get('task',[None]))
-        if trace and task_id in self._err:
-            if trace_gen == self._err[task_id]['gen']:
-                return True
-
-        view.settings().erase('shebang.stacktrace')
-        view.settings().erase('shebang.goto')
-        view.erase_regions('shebang.mark')
-        return False
-
-    def browse_stacktrace(self, task_id):
-        err = self._err.get(task_id)
-        if err:
-            file_paths = []
-            ui = []
-
-            # from pprint import pprint
-            # pprint(err)
-
-            for frame in err['stack']:
-                pth = frame['path']
-                file_paths.append('%s:%i'%(pth, frame['line']))
-                rel_pth = relpath(pth, err['cwd'])
-                if rel_pth.startswith('..'):
-                    home_pth = re.sub(r'^'+os.environ['HOME'], u'~', pth)
-                    if len(home_pth) < len(rel_pth):
-                        rel_pth = home_pth
-                if len(pth) < len(rel_pth):
-                    rel_pth = pth
-
-                if len(rel_pth)>48:
-                    rel_pth = u"%s…%s"%(rel_pth[:24], rel_pth[-24:])
-
-                ctx = frame.get('context')
-                if ctx:
-                    # ui.append(["%s: %i"%(rel_pth,frame['line']), ctx])
-                    ui.append(["%s: %s"%(rel_pth,ctx['fn']), ctx['src']])
-                else:
-                    ui.append("%s: %i"%(rel_pth,frame['line']))
-
-            def outcome(idx):
-                if idx>=0:
-                    file_path = err['stack'][idx]['path']
-                    lineno = err['stack'][idx]['line']
-                    for win in (w for w in sublime.windows() for v in w.views() if v.id()==task_id.view):
-                        match = [v for v in win.views() if v.file_name()==file_path]
-                        if match:
-                            view = match[0]
-                            view.settings().set('shebang.goto',idx)
-                            if view.id()==sublime.active_window().active_view().id():
-                                self.flash_errors(view)
-                            else:
-                                win.open_file(file_path)
-                            return
-
-                    view = sublime.active_window().open_file(file_path)
-                    stack = [ (f['path']==file_path and f['line']) for f in err['stack']]
-                    view.settings().set('shebang.goto', idx)
-                    view.settings().set('shebang.stacktrace', {"task":[task_id.path, task_id.view], 
-                                                               "gen":err['gen'],
-                                                               "stack":stack, 
-                                                               "depth":idx})
-            sublime.active_window().show_quick_panel(ui, outcome)

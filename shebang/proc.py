@@ -32,6 +32,7 @@ class AsyncProcess(object):
         self.inv = dict((k,v) for k,v in locals().items() if k not in ['self','listener'])
         self.listener = listener
         self.killed = False
+        self.ttl = 2
         self.encoding = encoding
         self.task = task
         self.start_time = time.time()
@@ -92,5 +93,6 @@ class AsyncProcess(object):
                     self.listener.on_data(self, data)
             else:
                 self.proc.stderr.close()
+                if self.listener:
+                    self.listener.on_data(self, None)
                 break
-

@@ -1,82 +1,94 @@
 # encoding: utf-8
-import os, sys
+import os, sys, re
 import functools
 import time
 import json
-import sublime
+import signal
 from collections import defaultdict
+from itertools import izip_longest as izipl
+from os.path import join, exists, basename
+
+import sublime
+from sublime import Region
 from format import Formatter
 from proc import AsyncProcess, Task
 
+all_views = lambda: ((w,v) for w in sublime.windows() for v in w.views())
+
 class Multiplexer(object):
     formatter = Formatter()
+    _awake = False
     _frame = None
     _views = {} # output views
     _procs = {} # running threads
+    _stacks = {} # stack traces
+    
+    def wake(self):
+        if self._awake: return
+        self._awake = True
+        def destroy_all_zombies():
+            for _,view in all_views():
+                task_id = Task(view)
+                pid = view.settings().get('shebang.task_pid')
 
-    def get_frame(self):
-        if not self._wakeup():
+                if task_id and pid:
+                    print "Zombie process (%i): %s"%(pid, task_id.path)
+                    os.kill(pid, signal.SIGKILL)
+                    self.formatter.zombie_quit(view, task_id)
+                elif task_id:
+                    self.formatter.fold_prior_output(view)                
+                view.settings().erase('shebang.task_pid')
+
+            self._watch()
+        sublime.set_timeout(functools.partial(destroy_all_zombies), 1000)
+
+    def _watch(self):
+        if self._procs: 
+            out_views = set([v.id() for v in self._views.values()])
+            live_views = set([v.id() for w,v in all_views()])
+            gone_views = out_views.difference(live_views)
+
+            if gone_views:
+                gone_tasks = [task_id for task_id,v in self._views.items() if v.id() in gone_views]
+                for task_id, proc in list(self._procs.items()):
+                    if task_id in gone_tasks:
+                        print "Orphaned process (%i): %s"%(proc.pid, task_id.path)
+                        proc.kill()
+                        del self._procs[task_id]
+                        del self._views[task_id]
+        sublime.set_timeout(functools.partial(self._watch), 1000)
+
+    def _setting(self, key):
+        return sublime.load_settings('Shebang.sublime-settings').get(key)
+
+    def script_win(self, task_id):
+        match = [w for w,v in all_views() if v.id()==task_id.view]
+        if match: return match[0]
+
+    def script_view(self, task_id):
+        match = [v for w,v in all_views() if v.id()==task_id.view]
+        if match: return match[0]
+
+    def output_win(self):
+        if self._frame is None or self._frame not in (w.id() for w in sublime.windows()):
             before = set([w.id() for w in sublime.windows()])
             sublime.run_command("new_window")
             after = set([w.id() for w in sublime.windows()])
             self._frame = after.difference(before).pop()
-            sublime.set_timeout(functools.partial(self._cleanup, monitor=True), 1000)
 
         for win in sublime.windows():
             if win.id() == self._frame:
                 return win
 
-    def _wakeup(self):
-        if self._frame is None or self._frame not in (w.id() for w in sublime.windows()):
-            self._frame = None
-            for w in sublime.windows():
-                for v in w.views():
-                    if v.settings().has('shebang.task_id'):
-                        self._frame = w.id()
-                        task_id = Task(v)
-                        # task_id = json.loads(v.settings().get('shebang.task_id','[]'))
-                        task_inv = json.loads(v.settings().get('shebang.invocation','{}'))
-                        if task_id and task_inv:
-                            # task_id = Task(*task_id)
-                            task_inv['task'] = task_id
-                            self._views[task_id] = v #.id()
-                            self.formatter.fold_old(v)
-                if self._frame: break
-        return self._frame is not None                
-
-    def _cleanup(self, monitor=False):
-        if not self._wakeup():
-            if self._procs:
-                for info, proc in self._procs.items():
-                    print 'Halted %s'%info.path
-                    proc.kill()
-                for task_id in self._views.keys():
-                    self.formatter.clear_errors(Task(*task_id))
-                self._procs = {}
-                self._views = {}
-                self._frame = None
-        elif not self._procs:
-            pass
-        elif monitor:
-            sublime.set_timeout(functools.partial(self._cleanup,monitor=True), 1000)
-        
-    def _setting(self, key):
-        return sublime.load_settings('Shebang.sublime-settings').get(key)
-
-    def script_view(self, task_id):
-        match = [v for w in sublime.windows() for v in w.views() if v.id()==task_id.view]
-        if match: return match[0]
-
-    def script_win(self, task_id):
-        match = [w for w in sublime.windows() for v in w.views() if v.id()==task_id.view]
-        if match: return match[0]
-
     def output_view(self, task_id, create=False):
-        if task_id in self._views:
-            return self._views[task_id]
+        old_view = self._views.get(task_id)            
+        if old_view:
+            if old_view.id() in [v.id() for w,v in all_views()]:
+                return old_view
+            del self._views[task_id]
 
         view_id = task_id.view
-        for view in (v for w in sublime.windows() for v in w.views() if v.settings().has('shebang.task_id')):
+        for view in (v for w,v in all_views() if v.settings().has('shebang.task_id')):
             this_task = Task(view)
             if this_task.view == view_id:
                 self._views[task_id] = view
@@ -87,8 +99,8 @@ class Multiplexer(object):
             if same_window:
                 win = self.script_win(task_id) or sublime.active_window()
             else:
+                win = self.output_win()
                 pass # need something like _wakeup to deal with global window identification
-                win = self.get_frame()
 
             view = win.new_file()
             view.set_scratch(True)
@@ -97,6 +109,20 @@ class Multiplexer(object):
             view.settings().set("scroll_past_end", False)
             self._views[task_id] = view
             return view
+
+    def view_closed(self, view):
+        task_id = Task(view)            
+        if task_id and task_id in self._views: 
+            del self._views[task_id]
+
+        if task_id in self._stacks:
+            del self._stacks[task_id] 
+
+        stale_proc = self._procs.get(task_id)
+        if stale_proc:
+            print 'Halted %s'%stale_proc.task.path
+            stale_proc.kill()
+            del self._procs[task_id]
 
     def spawn_worker(self, task_id, invocation):
         if self._procs.get(task_id):
@@ -117,6 +143,10 @@ class Multiplexer(object):
             view.settings().set("shebang.invocation", json.dumps(invocation))
             view.settings().set("shebang.task_id", json.dumps(task_id))
             view.settings().set("shebang.task_pid", proc.pid)
+
+            # src_view = self.script_view(task_id)
+            # if src_view:
+            #     src_view.settings().set("shebang.task_pid", proc.pid)
             self._procs[task_id] = proc
             self.formatter.begin_run(view, proc.pid, invocation)
             print 'Running %s'%task_id.path
@@ -145,43 +175,127 @@ class Multiplexer(object):
             if task_id.view==-1:
                 name = task_id.path[:32] + u"…" if len(task_id.path)>32 else u""
             else:
-                name = os.path.basename(task_id.path)
+                name = basename(task_id.path)
 
             auto_ok = not self._setting('confirm_terminate')
             if auto_ok or sublime.ok_cancel_dialog('%s:\nKill currently running process?'%name):
                 stale_proc = self._procs[task_id]
                 stale_proc.kill()
-                self.script_complete(stale_proc)
+                self.finish_worker(stale_proc)
                 return True
             else:
                 return False
 
-    def view_closed(self, view):
-        task_id = Task(view)            
-        if task_id and task_id in self._views: 
-            del self._views[task_id]
-
-        self.formatter.clear_errors(task_id)
-        stale_proc = self._procs.get(task_id)
-        if stale_proc:
-            print 'Halted %s'%stale_proc.task.path
-            stale_proc.kill()
-            del self._procs[task_id]
-
-    def script_complete(self, proc):
+    def finish_worker(self, proc):
         print 'Complete %s'%proc.task.path
         view = self.output_view(proc.task)
+        if not view:
+            print "Orphan still writing:",proc.task.path
+            return
+        view.settings().erase("shebang.task_pid")
 
         info = json.loads(view.settings().get("shebang.invocation", '{}'))
         if info:
-            info['task'] = Task(*info['task'])
+            task_id = info['task'] = Task(*info['task'])
+
             info.update(dict(exit_code=proc.exit_code(), 
                              elapsed=time.time() - proc.start_time))
-            self.formatter.completed_run(view, proc.task, info)
-            view.settings().erase("shebang.task_pid")
-            del self._procs[proc.task]
+
+            begin = view.find_by_selector('comment.header.shebang')[-1]
+            run_body = view.substr(Region(begin.b+3, view.size()))
+
+            self.formatter.completed_run(view, proc.task, info, run_body)
+
+            if not info['exit_code']:
+                if task_id in self._stacks:
+                    del self._stacks[task_id] 
+            else:
+                # examine the output for a recognizable traceback (for now just python...)
+                stack_frames, err_body = self._parse_stacktrace(run_body, info)
+
+                # show the output panel if we're looking at a source view
+                self.formatter.display_stacktrace_panel(err_body, info)
+
+                err_paths = [f['path'] for f in stack_frames]
+                err_gen = "%x"%hash(time.time())
+                self._stacks[task_id] = dict(stack=stack_frames, 
+                                             gen=err_gen, 
+                                             cwd=info['working_dir'] )
+
+                for win, view in ((w,v) for w,v in all_views() if v.file_name() in err_paths):
+                    file_path = view.file_name()
+                    stack = [ (f['path']==file_path and f['line']) for f in stack_frames]
+                    for lineno in reversed(stack):
+                        if lineno is not False:
+                            depth = stack.index(lineno)
+                            view.settings().set('shebang.goto', depth)
+                            break
+                    view.settings().set('shebang.stacktrace', {"task":[task_id.path, task_id.view], 
+                                                               "gen":err_gen,
+                                                               "stack":stack, 
+                                                               "depth":depth})
+                
+                for win in sublime.windows():
+                    if win.active_view().file_name() in err_paths:
+                        self.formatter.flash_errors(win.active_view())
+
+            if proc.task in self._procs:
+                del self._procs[proc.task]
         else:
             print "...but output window is lost"
+
+    def _parse_stacktrace(self, run_body, inv):
+        re_file = re.compile(inv['file_regex'], re.M)
+        m = re_file.search(run_body)
+        if not m: return None, None
+        err_body = run_body[m.start():]
+
+        # at a minimum find the filepaths and linenos for each frame of the trace
+        stack_frames = []
+        for m in re_file.finditer(err_body):
+            fn = m.group(1)
+            file_path = join(inv['working_dir'], fn)
+            if not exists(file_path) and exists(fn):
+                file_path = fn
+            stack_frames.append(dict(start=m.start(), end=m.end(), path=file_path, line=int(m.group(2))))
+
+        # cheat a bit for python and include the echo'd source line for each frame
+        for first, next in izipl(stack_frames, stack_frames[1:]):
+            if next:
+                rng = Region(first['end'], next['start'])
+            else:
+                rng = Region(first['end'], len(err_body))
+
+            m = re.search(r'in ([^\n]*)\n([^\n]+)\n', err_body[rng.a:rng.b], re.S)
+            if m:
+                first['context'] = dict(fn="%s%s"%(m.group(1).strip(), 
+                                           "" if m.group(1).endswith('>') else "()"),
+                                        src=m.group(2).strip() )
+            del first['start']
+            del first['end']
+        return stack_frames, err_body
+
+    def browse_stacktrace(self, task_id):
+        stacktrace = self._stacks.get(task_id)
+        if stacktrace:
+            self.formatter.display_stacktrace_menu(task_id, stacktrace)
+
+    def has_stacktrace(self, view):
+        task_id = Task(view)
+        if task_id:
+            return task_id in self._stacks
+
+        trace = view.settings().get('shebang.stacktrace', {})
+        trace_gen = trace.get('gen')
+        task_id = Task(*trace.get('task',[None]))
+        if trace and task_id in self._stacks:
+            if trace_gen == self._stacks[task_id]['gen']:
+                return True
+
+        view.settings().erase('shebang.stacktrace')
+        view.settings().erase('shebang.goto')
+        view.erase_regions('shebang.mark')
+        return False
 
     # event handlers for the async proc running behind the scenes
     def on_data(self, proc, data):
@@ -189,7 +303,10 @@ class Multiplexer(object):
 
     def _flush(self, proc, data):
         if data is None:
-            return self.script_complete(proc)
+            proc.ttl -= 1
+            if not proc.ttl:
+                self.finish_worker(proc)
+            return 
 
         try:
             txt = data.decode(proc.encoding)

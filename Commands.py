@@ -28,7 +28,8 @@ class OutputViewWatcher(sublime_plugin.EventListener):
         self._check_for_errors(view)
 
     def _check_for_errors(self, view):
-        if view.settings().has('shebang.stacktrace'):
+        pool.wake()
+        if view.settings().has('shebang.stacktrace') and pool.has_stacktrace(view):
             pool.formatter.flash_errors(view)
 
 class LastStackTraceCommand(sublime_plugin.WindowCommand):
@@ -40,10 +41,10 @@ class LastStackTraceCommand(sublime_plugin.WindowCommand):
             task_id = Task(*view.settings().get('shebang.stacktrace',{}).get('task',[]))
 
         if task_id:
-            pool.formatter.browse_stacktrace(task_id)
+            pool.browse_stacktrace(task_id)
             
     def is_enabled(self):
-        return pool.formatter.has_errors(self.window.active_view())
+        return pool.has_stacktrace(self.window.active_view())
         
 
 class ExecuteCommand(sublime_plugin.WindowCommand):
