@@ -19,56 +19,48 @@ from shebang import Task, AsyncProcess, Formatter, Multiplexer
 pool = Multiplexer()
 class OutputViewWatcher(sublime_plugin.EventListener):
     def on_close(self, view):
-        raw_task = view.settings().get('shebang.task_id')
-        if raw_task:
-            sublime.set_timeout(functools.partial(
-                pool.view_closed, Task(*json.loads(raw_task))
-            ), 0)
+        pool.view_closed(view)
+
+    def on_load(self, view):
+        self._check_for_errors(view)
 
     def on_activated(self, view):
-        if view.settings().has('shebang.err_ln'):
+        self._check_for_errors(view)
+
+    def _check_for_errors(self, view):
+        if view.settings().has('shebang.stacktrace'):
             pool.formatter.flash_errors(view)
 
 class LastStackTraceCommand(sublime_plugin.WindowCommand):
     def run(self, *args, **kwargs):
-        task_id = self._task_id()
+        view = self.window.active_view()
+        task_id = Task(view)
+
+        if not task_id:
+            task_id = Task(*view.settings().get('shebang.stacktrace',{}).get('task',[]))
+
         if task_id:
-            pool.formatter.browse_stacktrace(task_id,pool._invs.get(task_id))
-
+            pool.formatter.browse_stacktrace(task_id)
+            
     def is_enabled(self):
-        task_id = self._task_id()
-        return (task_id and task_id in pool.formatter._err)
-
-    def _task_id(self, view=None):
-        if not view:
-            view = self.window.active_view()
-        if view.settings().has('shebang.task_id'):
-            raw_task = json.loads(view.settings().get('shebang.task_id','[]'))
-        elif view.settings().has('shebang.err_ln'):
-            raw_task = (view.file_name(), view.window().id(), view.id())
+        return pool.formatter.has_errors(self.window.active_view())
         
-        if raw_task:    
-            return Task(*raw_task)
 
 class ExecuteCommand(sublime_plugin.WindowCommand):
     def run(self, cmd = None, file_regex = "", line_regex = "", working_dir = "",
             encoding = "utf-8", env = {}, quiet = False, kill = False, 
             virtualenv=None, prompt=False, path=None, restart=False, **kwargs):
 
-
-        if kwargs.get('foo'):
-            print "DOUBLE CLICKED", self.window.active_view().id()
-            return
-
         # if invoked from an output buffer, use the cached invocation rather than
         # treating the output buffer's contents as a script to be run
-        if self._cached_run(prompt, kill): return
+        if self._cached_run(prompt, kill): 
+            return
 
         # if invoked from a script file, collect the subprocess invocation 
         # details into a cacheable dict (for future reruns)
         view = self.window.active_view()
         file_path = view.file_name()
-        task_id = Task(file_path, view.window().id(), view.id())
+        task_id = Task(file_path, view.id())
         if not working_dir:
             try:
                 working_dir = dirname(file_path)
@@ -109,7 +101,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
                 cmd.insert(-1,'-u')
 
         invocation['arg_list'] = cmd
-        if sublime.load_settings('Shebang.sublime-settings').get('save_on_run'):
+        if pool._setting('save_on_run'):
             if view.is_dirty(): 
                 view.run_command('save')
 
@@ -120,18 +112,16 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
 
     def _cached_run(self, prompt, kill):
         view = self.window.active_view()
-        task_tuple = json.loads(view.settings().get("shebang.task_id", '[]'))
-        if not task_tuple:
-            return False
-        
-        task_id = Task(*task_tuple)
-        if prompt: 
-            self._prompt_then_run(task_id, pool._invs.get(task_id))
-        elif kill: 
-            pool.stop_worker(task_id)
-        else: 
-            pool.spawn_worker(task_id)
-        return True
+        task_id = Task(view)
+        task_inv = json.loads(view.settings().get("shebang.invocation", '{}'))
+        if task_id and task_inv:
+            if prompt: 
+                self._prompt_then_run(task_id, task_inv)
+            elif kill: 
+                pool.stop_worker(task_id)
+            else: 
+                pool.spawn_worker(task_id, task_inv)
+            return True
 
     def _prompt_then_run(self, task_id, invocation):
         orig_cmd = invocation['arg_list']
@@ -142,7 +132,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
             cmd_str = cmd_str.strip()
             if cmd_str != _spawn.quoted:
                 _spawn.inv.update(dict(arg_list=cmd_str, shell=True))
-                pool.spawn_worker(Task(cmd_str, -1, -1), _spawn.inv)
+                pool.spawn_worker(Task(cmd_str, -1), _spawn.inv)
             else:
                 pool.spawn_worker(_spawn.task, _spawn.inv)
         _spawn.quoted = orig_cmd
@@ -158,7 +148,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
         if not ve_pattern:
             # use the virtualenv defined in the settings file but let anything
             # defined in a build setting override it
-            ve_pattern = sublime.load_settings('Shebang.sublime-settings').get('virtualenv')
+            ve_pattern = pool._setting('virtualenv')
             if not ve_pattern: return None
 
         ve_binary = os.path.join(ve_pattern,'bin','python')
@@ -189,8 +179,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
         if prompt: return True
         view = self.window.active_view()
         fname = view.file_name()
-        task_token = view.settings().get("shebang.task_id")
-        task_id = json.loads(task_token or '[]')
+        task_id = Task(view)
         if not task_id:
             task_id = (fname, self.window.id(), view.id())
         is_running = task_id and Task(*task_id) in pool._procs
@@ -198,7 +187,7 @@ class ExecuteCommand(sublime_plugin.WindowCommand):
         if kill or restart:
             return is_running
             
-        if task_token \
+        if task_id \
         or fname.lower().endswith('.py') \
         or view.substr(Region(0,2))=="#!":
             return not is_running

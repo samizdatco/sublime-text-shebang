@@ -3,27 +3,37 @@ import os, sys
 import thread
 import subprocess
 import time
+import json
+from sublime import View
 from operator import itemgetter
     
 # used as a token to uniquely identify tasks and source view
 class Task(tuple):
-    def __new__(_cls, path, window, view):
-        return tuple.__new__(_cls, (path, window, view)) 
+    def __new__(_cls, *args):
+        if not args or args[0] is None: 
+            return None
+
+        if isinstance(args[0], View):
+            raw_task = args[0].settings().get('shebang.task_id')
+            return tuple.__new__(_cls, json.loads(raw_task)) if raw_task else None
+        elif len(args)==2:
+            return tuple.__new__(_cls, (args[0], int(args[1])))
+        elif len(args)==1:
+            return tuple.__new__(_cls, (args[0], -1))
     path = property(itemgetter(0))
-    window = property(itemgetter(1))
-    view = property(itemgetter(2))
+    view = property(itemgetter(1))
+
 
 # subprocess.Popen with a threaded listener (from Default/exec.py)
 class AsyncProcess(object):
     def __init__(self, arg_list, env, listener,
                 shell=False, encoding=None, task=None, 
                 **kwargs):
-
+        self.inv = dict((k,v) for k,v in locals().items() if k not in ['self','listener'])
         self.listener = listener
         self.killed = False
         self.encoding = encoding
         self.task = task
-
         self.start_time = time.time()
 
         # Hide the console window on Windows
@@ -70,7 +80,7 @@ class AsyncProcess(object):
             else:
                 self.proc.stdout.close()
                 if self.listener:
-                    self.listener.on_finished(self)
+                    self.listener.on_data(self, None)
                 break
 
     def read_stderr(self):
