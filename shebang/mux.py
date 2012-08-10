@@ -29,19 +29,33 @@ class Multiplexer(object):
                 # keep waiting for the views to load 
                 if ttl: sublime.set_timeout(functools.partial(destroy_all_zombies, ttl-1), 100)
             else:
-                # kill any processes that are still running since the last editor launch
+                renamed = {}
                 for _,view in all_views():
                     task_id = Task(view)
+                    src_id = json.loads(view.settings().get('shebang.src_id','[]'))
                     pid = view.settings().get('shebang.task_pid')
-
                     if task_id and pid:
+                        # kill any processes that are still running since the last editor launch
                         print "Zombie process (%i): %s"%(pid, task_id.path)
+                        view.settings().erase('shebang.task_pid')
                         os.kill(pid, signal.SIGKILL)
                         task_inv = json.loads(view.settings().get("shebang.invocation", '{}'))
                         self.formatter.zombie_quit(view, task_id, task_inv)
                     elif task_id:
-                        self.formatter.fold_prior_output(view)                
-                    view.settings().erase('shebang.task_pid')
+                        # tidy left over output views
+                        self.formatter.fold_prior_output(view)
+                    elif src_id:
+                        # note any src scripts whose view id has changed
+                        src_file, src_view = src_id
+                        if view.id() != src_view:
+                            renamed[Task(src_file, src_view)] = json.dumps([src_file, view.id()])
+                
+                # update the task_id in any output window corresponding to a view-shifted src
+                if renamed:
+                    for _,view in all_views():
+                        task_id = Task(view)
+                        if task_id in renamed:
+                            view.settings().set('shebang.task_id', renamed[task_id])
 
                 # kick off the watchdog process that catches processes whose window got deleted
                 self._watch()            
@@ -149,10 +163,10 @@ class Multiplexer(object):
             view.settings().set("shebang.invocation", json.dumps(invocation))
             view.settings().set("shebang.task_id", json.dumps(task_id))
             view.settings().set("shebang.task_pid", proc.pid)
+            if not invocation.get('shell'):
+                src_settings = self.script_view(task_id).settings()
+                src_settings.set('shebang.src_id', json.dumps(task_id))
 
-            # src_view = self.script_view(task_id)
-            # if src_view:
-            #     src_view.settings().set("shebang.task_pid", proc.pid)
             self._procs[task_id] = proc
             self.formatter.begin_run(view, proc.pid, invocation)
             print 'Running %s'%task_id.path
@@ -301,6 +315,7 @@ class Multiplexer(object):
         view.settings().erase('shebang.stacktrace')
         view.settings().erase('shebang.goto')
         view.erase_regions('shebang.mark')
+        view.erase_regions('shebang.errlines')
         return False
 
     # event handlers for the async proc running behind the scenes
