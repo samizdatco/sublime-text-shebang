@@ -32,7 +32,7 @@ class AsyncProcess(object):
         self.inv = dict((k,v) for k,v in locals().items() if k not in ['self','listener'])
         self.listener = listener
         self.killed = False
-        self.ttl = 2
+        self.ttl = 1 # 2 (i guess there's nothing to be lost by merging stdout+err?)
         self.encoding = encoding
         self.task = task
         self.start_time = time.time()
@@ -49,7 +49,8 @@ class AsyncProcess(object):
             proc_env[k] = os.path.expandvars(v).encode(sys.getfilesystemencoding())
 
         self.proc = subprocess.Popen(arg_list, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=shell)
+            # stderr=subprocess.PIPE, startupinfo=startupinfo, env=proc_env, shell=shell)
+            stderr=subprocess.STDOUT, startupinfo=startupinfo, env=proc_env, shell=shell)
 
         if self.proc.stdout:
             thread.start_new_thread(self.read_stdout, ())
