@@ -10,14 +10,14 @@
       "platforms": {
         "osx": [
           {
-            "version": "0.9",
-            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/v0.9"
+            "version": "0.9.1",
+            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/v0.9.1"
           }
         ],
         "linux":[
           {
-            "version": "0.9",
-            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/v0.9"
+            "version": "0.9.1",
+            "url": "https://github.com/samizdatco/sublime-text-shebang/zipball/v0.9.1"
           }
         ]
       }
