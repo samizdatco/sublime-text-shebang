@@ -12,7 +12,6 @@ import sublime
 from sublime import Region
 from format import Formatter
 from proc import AsyncProcess, Task
-
 all_views = lambda: ((w,v) for w in sublime.windows() for v in w.views())
 
 class Multiplexer(object):
@@ -23,30 +22,37 @@ class Multiplexer(object):
     _procs = {} # running threads
     _stacks = {} # stack traces
     
-    def wake(self):
-        if self._awake: return
-        self._awake = True
-        def destroy_all_zombies():
-            for _,view in all_views():
-                task_id = Task(view)
-                pid = view.settings().get('shebang.task_pid')
+    def __init__(self):
+        def destroy_all_zombies(ttl=20):
+            loaded = [not v.is_loading() for w in sublime.windows() for v in w.views()]
+            if not (loaded and all(loaded)):
+                # keep waiting for the views to load 
+                if ttl: sublime.set_timeout(functools.partial(destroy_all_zombies, ttl-1), 100)
+            else:
+                # kill any processes that are still running since the last editor launch
+                for _,view in all_views():
+                    task_id = Task(view)
+                    pid = view.settings().get('shebang.task_pid')
 
-                if task_id and pid:
-                    print "Zombie process (%i): %s"%(pid, task_id.path)
-                    os.kill(pid, signal.SIGKILL)
-                    self.formatter.zombie_quit(view, task_id)
-                elif task_id:
-                    self.formatter.fold_prior_output(view)                
-                view.settings().erase('shebang.task_pid')
+                    if task_id and pid:
+                        print "Zombie process (%i): %s"%(pid, task_id.path)
+                        os.kill(pid, signal.SIGKILL)
+                        task_inv = json.loads(view.settings().get("shebang.invocation", '{}'))
+                        self.formatter.zombie_quit(view, task_id, task_inv)
+                    elif task_id:
+                        self.formatter.fold_prior_output(view)                
+                    view.settings().erase('shebang.task_pid')
 
-            self._watch()
-        sublime.set_timeout(functools.partial(destroy_all_zombies), 1000)
+                # kick off the watchdog process that catches processes whose window got deleted
+                self._watch()            
+        destroy_all_zombies()
 
-    def _watch(self):
+    def _watch(self, dt=7000):
         if self._procs: 
             out_views = set([v.id() for v in self._views.values()])
             live_views = set([v.id() for w,v in all_views()])
             gone_views = out_views.difference(live_views)
+            dt = 1000
 
             if gone_views:
                 gone_tasks = [task_id for task_id,v in self._views.items() if v.id() in gone_views]
@@ -56,7 +62,7 @@ class Multiplexer(object):
                         proc.kill()
                         del self._procs[task_id]
                         del self._views[task_id]
-        sublime.set_timeout(functools.partial(self._watch), 1000)
+        sublime.set_timeout(functools.partial(self._watch), dt)
 
     def _setting(self, key):
         return sublime.load_settings('Shebang.sublime-settings').get(key)

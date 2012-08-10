@@ -28,7 +28,6 @@ class OutputViewWatcher(sublime_plugin.EventListener):
         self._check_for_errors(view)
 
     def _check_for_errors(self, view):
-        pool.wake()
         if view.settings().has('shebang.stacktrace') and pool.has_stacktrace(view):
             pool.formatter.flash_errors(view)
 

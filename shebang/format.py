@@ -108,7 +108,7 @@ class Formatter(object):
         view.set_read_only(True)
         view.erase_status("shebang:running")
 
-    def zombie_quit(self, view, task_id):
+    def zombie_quit(self, view, task_id, inv):
         self.append_txt(view, u'\n\n%sBroken pipe ⚠%s\n'%(self.m_result, self.m_end))
         view.set_read_only(False)
         edit = view.begin_edit()
@@ -118,8 +118,7 @@ class Formatter(object):
         view.set_read_only(True)
 
         self.fold_prior_output(view)        
-        info = json.loads(view.settings().get("shebang.invocation", '{}'))
-        status = info['arg_list'] if info.get('shell') else basename(task_id.path)
+        status = inv['arg_list'] if inv.get('shell') else basename(task_id.path)
         view.set_name(u"⚠ %s"%status)
         view.erase_status("shebang:running")
 
