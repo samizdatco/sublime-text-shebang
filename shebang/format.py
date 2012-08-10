@@ -209,6 +209,8 @@ class Formatter(object):
             lineno = int(err['stack'][int(err['depth'])])
             if not sublime.load_settings('Shebang.sublime-settings').get('use_separate_window'):
                 view.window().open_file("%s:%i"%(view.file_name(), lineno), sublime.ENCODED_POSITION)
+        all_lines = view.split_by_newlines(Region(0,view.size()))
+        lineno = int(err['stack'][int(err['depth'])])
 
         def blinkenlights(ttl=4):
             if ttl%2:
@@ -217,10 +219,16 @@ class Formatter(object):
                 view.add_regions('shebang.mark', [blinkenlights.errline], 'comment', '', sublime.HIDDEN)    
             if ttl:
                 sublime.set_timeout(functools.partial(blinkenlights,ttl-1), 90)
-        lineno = int(err['stack'][int(err['depth'])])
-        blinkenlights.errline = view.split_by_newlines(Region(0,view.size()))[lineno-1]
+        blinkenlights.errline = all_lines[lineno-1]
         sublime.set_timeout(functools.partial(blinkenlights), 90)
 
+        all_errs = []
+        for line in err['stack']:
+            if line is False: continue
+            all_errs.append(all_lines[int(line-1)])
+        view.add_regions('shebang.errlines', all_errs, 'comment', '../shebang/warning', sublime.HIDDEN)
+
         if goto is not None:
+            # print "GOTO"
             view.show_at_center(blinkenlights.errline)
             view.settings().erase('shebang.goto')
